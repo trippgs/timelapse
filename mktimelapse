@@ -1,0 +1,344 @@
+#!/usr/bin/env bash
+
+# Timelapse batch processor 
+#
+# Assemble timelapse videos from a series
+# of images using ffmpeg and other tools.
+# File operations are performed on copies
+# under ./temp/. Original images will not
+# undergo any modification.
+#
+# progress_bar code borrowed from stackoverflow
+# ASCII art from http://ascii.co.uk/art/camera
+#
+# Written and maintained by 
+# greg.t@psw.enterprises
+#
+# last modified: 05JUN2017
+#
+
+declare projectRoot
+declare appName
+declare appVer
+
+declare -a dependsOn
+declare -a tmpFiles
+declare -a exifOrient
+declare -a pixelWidth
+declare -a pixelHeight
+
+
+function read_image_data()
+{
+  local i file imgSize
+
+  printf "\nReading image size and orientation\n"
+
+  i=0
+
+  for file in ${tmpFiles[@]}
+  do  
+    imgSize=$(identify -format '%wx%h' ${projectRoot}/temp/${file})
+    pixelWidth[${i}]=$(echo ${imgSize} | cut -d "x" -f1)
+    pixelHeight[${i}]=$(echo ${imgSize} | cut -d "x" -f2)
+    exifOrient[${i}]=$(identify -verbose -format '%[EXIF:Orientation]' \
+      ${projectRoot}/temp/${file} | grep -o '[0-9]*')
+    
+    [ $(( i++ )) -ne 0 ]
+
+    progress_bar ${file} ${i} ${#tmpFiles[@]}
+  done
+
+  printf "\n"
+}
+
+function resize_images()
+{
+  local i file targetSize
+
+  printf "\nResizing image(s)\n"
+
+  i=0
+
+  for file in ${tmpFiles[@]}
+  do
+
+    # TODO:this feels like a hack. Isn't there a better way?
+    # set target size depending on orientation
+    if [ ${pixelWidth[${i}]} -gt ${pixelHeight[${1}]} ]
+    then
+      # Landscape
+      targetSize='3840x2160>'
+    else
+      # Portrait
+      targetSize='2160x3840>'
+    fi
+
+    # ImageMagick -resize WidthxHeight
+    convert ${projectRoot}/temp/${file} -resize ${targetSize} \
+      ${projectRoot}/temp/tmp_${file}
+
+    rm ${projectRoot}/temp/${file}
+    mv ${projectRoot}/temp/tmp_${file} ${projectRoot}/temp/${file}
+
+    [ $(( i++ )) -ne 0 ]
+
+    progress_bar ${file} ${i} ${#tmpFiles[@]}
+
+  done
+
+  printf "\n"
+}
+
+function rotate_images()
+{
+  local i file
+
+  printf "\nRotating image(s)\n"
+
+  i=0
+
+  for file in ${tmpFiles[@]}
+  do
+
+    case ${exifOrient[${i}]} in
+      3)
+        jpegtran -rotate 180 ${projectRoot}/temp/${file} > \
+          ${projectRoot}/temp/tmp_${file}
+          
+        rm ${projectRoot}/temp/${file}
+        mv ${projectRoot}/temp/tmp_${file} ${projectRoot}/temp/${file}
+        ;;
+
+      6)   
+        jpegtran -rotate 90 ${projectRoot}/temp/${file} > \
+          ${projectRoot}/temp/tmp_${file}
+          
+        rm ${projectRoot}/temp/${file}
+        mv ${projectRoot}/temp/tmp_${file} ${projectRoot}/temp/${file}
+        ;;
+
+      8)
+        jpegtran -rotate 270 ${projectRoot}/temp/${file} > \
+           ${projectRoot}/temp/tmp_${file}
+          
+        rm ${projectRoot}/temp/${file}
+        mv ${projectRoot}/temp/tmp_${file} ${file}
+        ;;
+    esac
+
+    [ $(( i++ )) -ne 0 ]
+
+    progress_bar ${file} ${i} ${#tmpFiles[@]}
+
+  done
+
+  printf "\n"
+}
+
+function copy_images()
+{
+  declare -a srcFiles
+  local i file target
+  
+  # list files by newest modification time, then reverse order
+  srcFiles=($(ls -tr1 *.JPG || ls -tr1 *.jpg))
+
+  if ! [ -d ${projectRoot}/temp ]
+  then
+    mkdir temp
+  fi
+
+  printf "\nCopying file(s) to ${projectRoot}/temp/ \n"
+
+  i=0
+
+  for file in ${srcFiles[@]}
+  do
+
+    target="$(printf "%06d\n" ${i}).JPG"
+    tmpFiles[${i}]=${target}
+
+    if [ -e ${projectRoot}/temp/${target} ]
+    then
+      rm ${projectRoot}/temp/${target}
+    fi
+
+    cp ${projectRoot}/${file} ${projectRoot}/temp/${target}
+      
+    [ $(( i++ )) -ne 0 ]
+
+    progress_bar ${target} ${i} ${#srcFiles[@]}
+
+  done
+
+  printf "\n"
+}
+
+function compile_images()
+{
+  printf "\n${#tmpFiles[@]} images have been processed\n\n"
+  
+  read -n 1 -p "Compile ? [Yes/No] " choice
+
+  case ${choice} in
+
+    "y"|"Y")
+      printf "\nCompiling timelapse video.. this may take a while\n"
+
+      ffmpeg  -r 15 -start_number 0 -i ${projectRoot}/temp/%06d.JPG \
+        -vcodec libx264  -crf 18 -preset slow ${projectRoot}/out.mp4
+
+      printf "\nVideo out.mp4 is $(du -ch ${projectRoot}/out.mp4)\n"
+      ;;
+
+    "n"|"N")
+      printf "\nNothing to do here..."
+      return 0
+      ;;
+
+    *) # ID-10-T error case
+      compile_images
+      ;;
+
+  esac
+}
+
+function chk_depends()
+{
+  local i program prog
+
+  printf "Checking for dependencies...\n"
+
+  i=0
+
+  for program in ${dependsOn[@]}
+  do
+
+    if ! prog="$(type -p "${program}")" || [ -z "${program}" ]
+    then
+      printf "\n\nThe dependency '${program}' isn't installed!\n" 1>&2 
+      return 1
+    fi
+
+    [ $(( i++ )) -ne 0 ]
+
+    progress_bar ${program} ${i} ${#dependsOn[@]}
+
+  done
+
+  printf "\n"
+}
+
+function cleanup()
+{
+  if [ -d ${projectRoot}/temp ]
+  then
+    printf "\n\nCleaning up..."
+    rm ${projectRoot}/temp/*
+    rmdir ${projectRoot}/temp
+  fi
+
+  printf "\n\n"
+}
+
+function print_greeting()
+{
+  clear
+
+  printf "\n${appName} ${appVer}\n"
+
+  printf '\n'
+  printf '          .---.\n'
+  printf '          |[X]|\n'
+  printf '   _.==._.""""".___n__\n'
+  printf '  d __ ___.-""-. _____b\n'
+  printf '  |[__]  /."""".\ _   |\n'
+  printf '  |     // /""\ \\\_)  |\n'
+  printf '  |     \\\ \__/ //    |\n'
+  printf '  | Nikon\`.__."/     |\n'
+  printf '  \\=======`-..-"======/\n'
+  printf '   `-----------------"   hjw\n'
+  
+
+  printf "\n"
+}
+
+function print_usage()
+{
+  printf "\n  USAGE: "
+  printf "'-h OR --help'\n"
+  printf "\n"
+
+  exit 0
+}
+
+function progress_bar()
+{
+  local file fill empty
+  declare -i progress done left
+
+  # Process data
+  file=${1}
+  progress=(${2}*100/${3}*100)/100
+  done=(${progress}*4)/10
+  left=40-$done
+
+  # Build progressbar string lengths
+  fill=$(printf "%${done}s")
+  empty=$(printf "%${left}s")
+
+  # 1.2 Build progressbar strings and print the ProgressBar line
+  # 1.2.1 Output example:
+  # 1.2.1.1 Progress : [########################################] 100%
+  printf "\r${file}: [${fill// /\#}${empty// /-}] ${progress}%%"
+}
+
+function main()
+{
+  appName="TIMELAPSE BATCH PROCESSOR"
+  appVer="v0.1a"
+  projectRoot=$(pwd)
+  dependsOn=('du' 'x264' 'ffmpeg' 'convert' 'jpegtran')
+
+  local arg
+
+  if [ -z "$1" ]
+  then
+    print_greeting
+
+    if chk_depends        \
+      && copy_images      \
+      && read_image_data  \
+      && rotate_images    \
+      && resize_images    \
+      && compile_images   \
+      && cleanup
+    then
+      printf "Complete!\n\n"
+      exit 0
+    else
+      printf "Aborting...\n" 1>&2
+      cleanup
+      exit 1
+    fi
+  else
+    for arg in $1
+    do
+      case $arg in
+
+        "-h"|"--help")
+          print_usage
+          ;;
+
+        *)
+          printf "Invalid argument '$arg'\n"
+          exit 1
+          ;;
+
+      esac
+    done
+  fi
+}
+
+main "$@"
