@@ -27,6 +27,7 @@ declare -a exifOrient
 declare -a pixelWidth
 declare -a pixelHeight
 
+declare -i gitMergeTest
 
 function read_image_data()
 {
