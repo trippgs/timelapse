@@ -299,7 +299,7 @@ function main()
   appName="TIMELAPSE BATCH PROCESSOR"
   appVer="v0.1a"
   projectRoot=$(pwd)
-  dependsOn=('du' 'x264' 'ffmpeg' 'convert' 'jpegtran')
+  dependsOn=('x264' 'ffmpeg' 'convert' 'jpegtran')
 
   local arg
 
