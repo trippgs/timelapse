@@ -5,7 +5,8 @@
 # Assemble timelapse videos from a series
 # of images using ffmpeg and other tools.
 # File operations are performed on copies
-# under ./temp/. Original images will not
+# under a randomly generated temporary 
+# directory. Original images will not
 # undergo any modification.
 #
 # progress_bar code borrowed from stackoverflow
@@ -14,12 +15,10 @@
 # Written and maintained by 
 # greg.t@psw.enterprises
 #
-# last modified: 05JUN2017
-#
 
 declare projectRoot
-declare appName
-declare appVer
+declare tmpDirectory
+declare errLogFile
 
 declare -a dependsOn
 declare -a tmpFiles
@@ -27,11 +26,10 @@ declare -a exifOrient
 declare -a pixelWidth
 declare -a pixelHeight
 
-declare -i gitMergeTest
-
 function read_image_data()
 {
-  local i file imgSize
+  local file imgSize
+	local -i i
 
   printf "\nReading image size and orientation\n"
 
@@ -39,11 +37,16 @@ function read_image_data()
 
   for file in ${tmpFiles[@]}
   do  
-    imgSize=$(identify -format '%wx%h' ${projectRoot}/temp/${file})
+    imgSize=$(identify -format '%wx%h' \
+            ${projectRoot}/${tmpDirectory}/${file} 2>>${errLogFile})
+
     pixelWidth[${i}]=$(echo ${imgSize} | cut -d "x" -f1)
     pixelHeight[${i}]=$(echo ${imgSize} | cut -d "x" -f2)
-    exifOrient[${i}]=$(identify -verbose -format '%[EXIF:Orientation]' \
-      ${projectRoot}/temp/${file} | grep -o '[0-9]*')
+
+		exifOrient[${i}]=$(jpegexiforient ${projectRoot}/${tmpDirectory}/${file})
+
+    #exifOrient[${i}]=$(identify -verbose -format '%[EXIF:Orientation]' \
+    #  ${projectRoot}/${tmpDirectory}/${file} 2>>${errLogFile} | grep -o '[0-9]*')
     
     [ $(( i++ )) -ne 0 ]
 
@@ -55,7 +58,8 @@ function read_image_data()
 
 function resize_images()
 {
-  local i file targetSize
+  local file targetSize resize
+	local -i i
 
   printf "\nResizing image(s)\n"
 
@@ -66,21 +70,27 @@ function resize_images()
 
     # TODO:this feels like a hack. Isn't there a better way?
     # set target size depending on orientation
-    if [ ${pixelWidth[${i}]} -gt ${pixelHeight[${1}]} ]
+    if [ ${pixelWidth[${i}]} -gt ${pixelHeight[${i}]} ]
     then
-      # Landscape
-      targetSize='3840x2160>'
+      # Landscape 6000x4000
+			targetSize="3840x2160"
+      resize=">${targetSize}^" # resize format string
     else
-      # Portrait
-      targetSize='2160x3840>'
+			# Portrait 4000x6000
+			targetSize="2160x3840"
+      resize=">${targetSize}^"
     fi
 
-    # ImageMagick -resize WidthxHeight
-    convert ${projectRoot}/temp/${file} -resize ${targetSize} \
-      ${projectRoot}/temp/tmp_${file}
+		# Resize image to specified dimensions but preserve aspect ratio
+		convert ${projectRoot}/${tmpDirectory}/${file} \
+						-resize ${resize} \
+						-gravity center -extent ${targetSize} \
+						${projectRoot}/${tmpDirectory}/tmp_${file} 2>>${errLogFile}
 
-    rm ${projectRoot}/temp/${file}
-    mv ${projectRoot}/temp/tmp_${file} ${projectRoot}/temp/${file}
+    rm ${projectRoot}/${tmpDirectory}/${file}
+
+    mv ${projectRoot}/${tmpDirectory}/tmp_${file} \
+       ${projectRoot}/${tmpDirectory}/${file}
 
     [ $(( i++ )) -ne 0 ]
 
@@ -93,7 +103,8 @@ function resize_images()
 
 function rotate_images()
 {
-  local i file
+  local file
+	local -i i
 
   printf "\nRotating image(s)\n"
 
@@ -101,32 +112,40 @@ function rotate_images()
 
   for file in ${tmpFiles[@]}
   do
+		# Automatically change EXIF orientation to '1'
+		exifautotran ${projectRoot}/${tmpDirectory}/${file} 2>>${errLogFile}
 
-    case ${exifOrient[${i}]} in
-      3)
-        jpegtran -rotate 180 ${projectRoot}/temp/${file} > \
-          ${projectRoot}/temp/tmp_${file}
-          
-        rm ${projectRoot}/temp/${file}
-        mv ${projectRoot}/temp/tmp_${file} ${projectRoot}/temp/${file}
-        ;;
-
-      6)   
-        jpegtran -rotate 90 ${projectRoot}/temp/${file} > \
-          ${projectRoot}/temp/tmp_${file}
-          
-        rm ${projectRoot}/temp/${file}
-        mv ${projectRoot}/temp/tmp_${file} ${projectRoot}/temp/${file}
-        ;;
-
-      8)
-        jpegtran -rotate 270 ${projectRoot}/temp/${file} > \
-           ${projectRoot}/temp/tmp_${file}
-          
-        rm ${projectRoot}/temp/${file}
-        mv ${projectRoot}/temp/tmp_${file} ${file}
-        ;;
-    esac
+#   case ${exifOrient[${i}]} in
+#     3)
+#       jpegtran -rotate 180 ${projectRoot}/${tmpDirectory}/${file} > \
+#         ${projectRoot}/${tmpDirectory}/tmp_${file} 2>>${errLogFile}
+#         
+#       rm ${projectRoot}/${tmpDirectory}/${file}
+#
+#       mv ${projectRoot}/${tmpDirectory}/tmp_${file} \
+#          ${projectRoot}/${tmpDirectory}/${file}
+#       ;;
+#
+#     6)   
+#       jpegtran -rotate 90 ${projectRoot}/${tmpDirectory}/${file} > \
+#         ${projectRoot}/${tmpDirectory}/tmp_${file} 2>>${errLogFile}
+#         
+#       rm ${projectRoot}/${tmpDirectory}/${file}
+#       
+#       mv ${projectRoot}/${tmpDirectory}/tmp_${file} \
+#          ${projectRoot}/${tmpDirectory}/${file}
+#       ;;
+#
+#     8)
+#       jpegtran -rotate 270 ${projectRoot}/${tmpDirectory}/${file} > \
+#          ${projectRoot}/${tmpDirectory}/tmp_${file} 2>>${errLogFile}
+#         
+#       rm ${projectRoot}/${tmpDirectory}/${file}
+#       
+#       mv ${projectRoot}/${tmpDirectory}/tmp_${file} \
+#          ${projectRoot}/${tmpDirectory}/${file}
+#       ;;
+#   esac
 
     [ $(( i++ )) -ne 0 ]
 
@@ -139,33 +158,45 @@ function rotate_images()
 
 function copy_images()
 {
-  declare -a srcFiles
-  local i file target
+  local file target srcFiles
+	local -i i
+
+	# generate time-based uuid and truncate to first 8 characters
+  tmpDirectory=$(uuidgen -t | cut -f1 -d "-")
   
   # list files by newest modification time, then reverse order
-  srcFiles=($(ls -tr1 *.JPG || ls -tr1 *.jpg))
+  srcFiles=($(ls -tr1 *.JPG 2>/dev/null  \
+           || ls -tr1 *.jpg 2>/dev/null  \
+           || ls -tr1 *.JPEG 2>/dev/null \
+           || ls -tr1 *.jpeg 2>/dev/null))
 
-  if ! [ -d ${projectRoot}/temp ]
+  if [ ${#srcFiles[@]} -eq 0 ]
   then
-    mkdir temp
+    printf "\nThere are no JPEG files in this directory\n" 
+    return 1
   fi
 
-  printf "\nCopying file(s) to ${projectRoot}/temp/ \n"
+  # make directory for temp files, fail nicely
+  if ! $(mkdir ${tmpDirectory})
+  then
+    return 1
+  fi
+
+  printf "\nCopying file(s) to\n${projectRoot}/${tmpDirectory}/ \n"
 
   i=0
-
-  for file in ${srcFiles[@]}
+  
+	for file in ${srcFiles[@]}
   do
 
     target="$(printf "%06d\n" ${i}).JPG"
     tmpFiles[${i}]=${target}
 
-    if [ -e ${projectRoot}/temp/${target} ]
+    # copy tmp files to tmp directory; fail nicely if something goes wrong
+    if ! $(cp ${projectRoot}/${file} ${projectRoot}/${tmpDirectory}/${target})
     then
-      rm ${projectRoot}/temp/${target}
+      return 1
     fi
-
-    cp ${projectRoot}/${file} ${projectRoot}/temp/${target}
       
     [ $(( i++ )) -ne 0 ]
 
@@ -176,21 +207,24 @@ function copy_images()
   printf "\n"
 }
 
-function compile_images()
+function mk_timelapse()
 {
   printf "\n${#tmpFiles[@]} images have been processed\n\n"
   
-  read -n 1 -p "Compile ? [Yes/No] " choice
+  read -n 1 -p "Compile timelapse video? [Yes/No] " choice
 
   case ${choice} in
 
     "y"|"Y")
       printf "\nCompiling timelapse video.. this may take a while\n"
 
-      ffmpeg  -r 15 -start_number 0 -i ${projectRoot}/temp/%06d.JPG \
-        -vcodec libx264  -crf 18 -preset slow ${projectRoot}/out.mp4
-
-      printf "\nVideo out.mp4 is $(du -ch ${projectRoot}/out.mp4)\n"
+      if ! $(ffmpeg  -r 15 -start_number 0 -i \
+        ${projectRoot}/${tmpDirectory}/%06d.JPG \
+        -vcodec libx264 -crf 18 -preset slow ${projectRoot}/out.mp4 \
+        &>>${errLogFile})
+      then
+        return 1
+      fi
       ;;
 
     "n"|"N")
@@ -199,7 +233,7 @@ function compile_images()
       ;;
 
     *) # ID-10-T error case
-      compile_images
+      mk_timelapse
       ;;
 
   esac
@@ -207,16 +241,17 @@ function compile_images()
 
 function chk_depends()
 {
-  local i program prog
+  local program prog
+	local -i i
 
-  printf "Checking for dependencies...\n"
+  printf "\nChecking for dependencies...\n"
 
   i=0
 
-  for program in ${dependsOn[@]}
+	for program in ${dependsOn[@]}
   do
 
-    if ! prog="$(type -p "${program}")" || [ -z "${program}" ]
+		if ! prog="$(type -p "${program}")" || [ -z "${program}" ]
     then
       printf "\n\nThe dependency '${program}' isn't installed!\n" 1>&2 
       return 1
@@ -224,20 +259,18 @@ function chk_depends()
 
     [ $(( i++ )) -ne 0 ]
 
-    progress_bar ${program} ${i} ${#dependsOn[@]}
+    # progress_bar ${program} ${i} ${#dependsOn[@]}
 
   done
-
-  printf "\n"
 }
 
 function cleanup()
 {
-  if [ -d ${projectRoot}/temp ]
+  if [ -d ${projectRoot}/${tmpDirectory} ]
   then
     printf "\n\nCleaning up..."
-    rm ${projectRoot}/temp/*
-    rmdir ${projectRoot}/temp
+    rm ${projectRoot}/${tmpDirectory}/*
+    rmdir ${projectRoot}/${tmpDirectory}
   fi
 
   printf "\n\n"
@@ -247,7 +280,7 @@ function print_greeting()
 {
   clear
 
-  printf "\n${appName} ${appVer}\n"
+  printf "\nTIMELAPSE BATCH PROCESSOR\n"
 
   printf '\n'
   printf '          .---.\n'
@@ -260,16 +293,13 @@ function print_greeting()
   printf '  | Nikon\`.__."/     |\n'
   printf '  \\=======`-..-"======/\n'
   printf '   `-----------------"   hjw\n'
-  
-
-  printf "\n"
 }
 
 function print_usage()
 {
-  printf "\n  USAGE: "
-  printf "'-h OR --help'\n"
-  printf "\n"
+  printf "\nUSAGE:"
+  printf "\n\t-h\t\tThis help message"
+  printf "\n\t--help\n"
 
   exit 0
 }
@@ -277,9 +307,9 @@ function print_usage()
 function progress_bar()
 {
   local file fill empty
-  declare -i progress done left
+	local -i left done progress
 
-  # Process data
+  # Process arguments
   file=${1}
   progress=(${2}*100/${3}*100)/100
   done=(${progress}*4)/10
@@ -297,12 +327,18 @@ function progress_bar()
 
 function main()
 {
-  appName="TIMELAPSE BATCH PROCESSOR"
-  appVer="v0.1a"
   projectRoot=$(pwd)
-  dependsOn=('x264' 'ffmpeg' 'convert' 'jpegtran')
+  errLogFile="${projectRoot}/mktimelapse.error.log"
+  dependsOn=('cut' 'x264' 'ffmpeg' 'convert' 'uuidgen' 'jpegtran' \
+				     'exifautotran' 'jpegexiforient')
 
   local arg
+
+  # start with an empty error log
+  if [ -e ${errLogFile} ]
+  then  
+    truncate -s 0 ${errLogFile}
+  fi
 
   if [ -z "$1" ]
   then
@@ -313,13 +349,14 @@ function main()
       && read_image_data  \
       && rotate_images    \
       && resize_images    \
-      && compile_images   \
+      && mk_timelapse   \
       && cleanup
     then
       printf "Complete!\n\n"
       exit 0
     else
-      printf "Aborting...\n" 1>&2
+      printf "\nSomething went wrong, aborting...\n" 1>&2
+			printf "Please refer to ${errLogFile##*/}"
       cleanup
       exit 1
     fi
