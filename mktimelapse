@@ -43,7 +43,7 @@ function read_image_data()
     pixelWidth[${i}]=$(echo ${imgSize} | cut -d "x" -f1)
     pixelHeight[${i}]=$(echo ${imgSize} | cut -d "x" -f2)
 
-		exifOrient[${i}]=$(jpegexiforient ${projectRoot}/${tmpDirectory}/${file})
+    exifOrient[${i}]=$(jpegexiforient ${projectRoot}/${tmpDirectory}/${file})
 
     #exifOrient[${i}]=$(identify -verbose -format '%[EXIF:Orientation]' \
     #  ${projectRoot}/${tmpDirectory}/${file} 2>>${errLogFile} | grep -o '[0-9]*')
@@ -59,7 +59,7 @@ function read_image_data()
 function resize_images()
 {
   local file targetSize resize
-	local -i i
+  local -i i
 
   printf "\nResizing image(s)\n"
 
@@ -73,19 +73,19 @@ function resize_images()
     if [ ${pixelWidth[${i}]} -gt ${pixelHeight[${i}]} ]
     then
       # Landscape 6000x4000
-			targetSize="3840x2160"
+      targetSize="3840x2160"
       resize=">${targetSize}^" # resize format string
     else
-			# Portrait 4000x6000
-			targetSize="2160x3840"
+      # Portrait 4000x6000
+      targetSize="2160x3840"
       resize=">${targetSize}^"
     fi
 
-		# Resize image to specified dimensions but preserve aspect ratio
-		convert ${projectRoot}/${tmpDirectory}/${file} \
-						-resize ${resize} \
-						-gravity center -extent ${targetSize} \
-						${projectRoot}/${tmpDirectory}/tmp_${file} 2>>${errLogFile}
+    # Resize image to specified dimensions but preserve aspect ratio
+    convert ${projectRoot}/${tmpDirectory}/${file} \
+            -resize ${resize} \
+            -gravity center -extent ${targetSize} \
+            ${projectRoot}/${tmpDirectory}/tmp_${file} 2>>${errLogFile}
 
     rm ${projectRoot}/${tmpDirectory}/${file}
 
@@ -104,7 +104,7 @@ function resize_images()
 function rotate_images()
 {
   local file
-	local -i i
+  local -i i
 
   printf "\nRotating image(s)\n"
 
@@ -112,8 +112,8 @@ function rotate_images()
 
   for file in ${tmpFiles[@]}
   do
-		# Automatically change EXIF orientation to '1'
-		exifautotran ${projectRoot}/${tmpDirectory}/${file} 2>>${errLogFile}
+    # Automatically change EXIF orientation to '1'
+    exifautotran ${projectRoot}/${tmpDirectory}/${file} 2>>${errLogFile}
 
 #   case ${exifOrient[${i}]} in
 #     3)
@@ -159,9 +159,9 @@ function rotate_images()
 function copy_images()
 {
   local file target srcFiles
-	local -i i
+  local -i i
 
-	# generate time-based uuid and truncate to first 8 characters
+  # generate time-based uuid and truncate to first 8 characters
   tmpDirectory=$(uuidgen -t | cut -f1 -d "-")
   
   # list files by newest modification time, then reverse order
@@ -186,7 +186,7 @@ function copy_images()
 
   i=0
   
-	for file in ${srcFiles[@]}
+  for file in ${srcFiles[@]}
   do
 
     target="$(printf "%06d\n" ${i}).JPG"
@@ -242,16 +242,16 @@ function mk_timelapse()
 function chk_depends()
 {
   local program prog
-	local -i i
+  local -i i
 
   printf "\nChecking for dependencies...\n"
 
   i=0
 
-	for program in ${dependsOn[@]}
+  for program in ${dependsOn[@]}
   do
 
-		if ! prog="$(type -p "${program}")" || [ -z "${program}" ]
+    if ! prog="$(type -p "${program}")" || [ -z "${program}" ]
     then
       printf "\n\nThe dependency '${program}' isn't installed!\n" 1>&2 
       return 1
@@ -307,7 +307,7 @@ function print_usage()
 function progress_bar()
 {
   local file fill empty
-	local -i left done progress
+  local -i left done progress
 
   # Process arguments
   file=${1}
@@ -330,7 +330,7 @@ function main()
   projectRoot=$(pwd)
   errLogFile="${projectRoot}/mktimelapse.error.log"
   dependsOn=('cut' 'x264' 'ffmpeg' 'convert' 'uuidgen' 'jpegtran' \
-				     'exifautotran' 'jpegexiforient')
+             'exifautotran' 'jpegexiforient')
 
   local arg
 
@@ -356,7 +356,7 @@ function main()
       exit 0
     else
       printf "\nSomething went wrong, aborting...\n" 1>&2
-			printf "Please refer to ${errLogFile##*/}"
+      printf "Please refer to ${errLogFile##*/}"
       cleanup
       exit 1
     fi
