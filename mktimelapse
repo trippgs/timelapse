@@ -29,7 +29,7 @@ declare -a pixelHeight
 function read_image_data()
 {
   local file imgSize
-	local -i i
+  local -i i
 
   printf "\nReading image size and orientation\n"
 
